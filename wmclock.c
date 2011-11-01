@@ -447,6 +447,12 @@ void redrawWindow(XpmIcon *v)
 	     0, 0, v->attributes.width, v->attributes.height, 0, 0);
 }
 
+gboolean redraw(gpointer user_data)
+{
+	XpmIcon *v = (XpmIcon *)user_data;
+	redrawWindow(v);
+}
+
 /* Get a Pixel for the given color name */
 Pixel GetColor(const char *colorName)
 {
@@ -949,7 +955,7 @@ int main(int argc, char **argv)
 
    XSetCommand(dpy, win, argv, argc);
    XMapWindow(dpy,win);
-	g_timeout_add(60, redraw, NULL);
+	g_timeout_add(60, redraw, &visible);
 
    showTime();
    redrawWindow(&visible);
