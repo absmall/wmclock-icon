@@ -32,6 +32,7 @@
 #include <X11/Xlib.h>
 #include <X11/xpm.h>
 #include <X11/extensions/shape.h>
+#include <gtk/gtk.h>
 
 #include "dynlist.h"
 
@@ -826,6 +827,8 @@ int main(int argc, char **argv)
    /* Parse command line options */
    progName = extractProgName(argv[0]);
    processArgs(argc, argv);
+
+   gtk_init(&argc, &argv);
    
    /* init led position */
 #ifndef ONLY_SHAPED_WINDOW
@@ -946,9 +949,11 @@ int main(int argc, char **argv)
 
    XSetCommand(dpy, win, argv, argc);
    XMapWindow(dpy,win);
+	g_timeout_add(60, redraw, NULL);
 
    showTime();
    redrawWindow(&visible);
+	gtk_main();
    while (1)
     {
        if (actualTime != mytime())
@@ -1045,11 +1050,6 @@ int main(int argc, char **argv)
 		}
 	       break;
 	    case DestroyNotify:
-#if 0
-	       XFreeGC(dpy, normalGC);
-	       XDestroyWindow(dpy, win);
-	       XDestroyWindow(dpy, iconWin);
-#endif /* 0 */
 #ifdef ONLY_SHAPED_WINDOW
 	       XFreePixmap(dpy, visible.pixmap);
 #endif /* ONLY_SHAPED_WINDOW */
