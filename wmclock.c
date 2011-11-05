@@ -86,7 +86,7 @@
 #define WEEKDAY_X_POS		6
 #define WEEKDAY_Y_POS		1
 #define WEEKDAY_X_OFFSET	0
-#define WEEKDAY_WIDTH		21
+#define WEEKDAY_WIDTH		20
 #define WEEKDAY_HEIGHT		6
 
 #define OUR_WINDOW_EVENTS	(ExposureMask | ButtonPressMask | StructureNotifyMask)
@@ -329,13 +329,13 @@ void GetXpms(void)
     {
 	   months = gdk_pixbuf_new_from_xpm_data((const char **)month_xpm);
     }
-   if (months != NULL)
+   if (months == NULL)
     {
        showFatalError("create month pixmap:", errColorCells);
     }
 
    dateNums = gdk_pixbuf_new_from_xpm_data((const char **)date_xpm);
-   if (dateNums != NULL)
+   if (dateNums == NULL)
     {
        showFatalError("create date pixmap:", errColorCells);
     }
@@ -348,7 +348,7 @@ void GetXpms(void)
     {
 	   weekdays = gdk_pixbuf_new_from_xpm_data((const char **)weekday_xpm);
     }
-   if (weekdays != NULL)
+   if (weekdays == NULL)
     {
        showFatalError("create weekday pixmap:", errColorCells);
     }
@@ -826,6 +826,8 @@ int main(int argc, char **argv)
 		}
 	}
 
+	gtk_init(&argc, &argv);
+
 	/* Icon Daten nach XImage konvertieren */
 	GetXpms();
 
@@ -839,7 +841,6 @@ int main(int argc, char **argv)
 		//XShapeCombineMask(dpy, win, ShapeBounding, 0, 0, shapeMask, ShapeSet);
 	}
 
-	gtk_init(&argc, &argv);
 	g_timeout_add(0, timer, NULL);
 	g_signal_connect(G_OBJECT(win), "activate", 
 					 G_CALLBACK(click), NULL);
