@@ -89,8 +89,6 @@
 #define WEEKDAY_WIDTH		20
 #define WEEKDAY_HEIGHT		6
 
-#define OUR_WINDOW_EVENTS	(ExposureMask | ButtonPressMask | StructureNotifyMask)
-
 #define LED_XPM_BRIGHT_LINE_INDEX	3
 #define LED_XPM_BRIGHT_CHAR		'+'
 #define LED_XPM_DIM_LINE_INDEX		4
@@ -788,7 +786,6 @@ void click(GtkStatusIcon *status_icon,
 int main(int argc, char **argv)
 {
 	int           i;
-	GdkPixbuf    *shapeMask;
 
 	/* Parse command line options */
 	progName = extractProgName(argv[0]);
@@ -833,13 +830,6 @@ int main(int argc, char **argv)
 
 	/* Create a window to hold the banner */
 	win = gtk_status_icon_new_from_pixbuf(clockBg);
-
-	if (enableShapedWindow)
-	{
-		shapeMask = gdk_pixbuf_new_from_xpm_data((const char **)mask_xpm);
-		//FIXME
-		//XShapeCombineMask(dpy, win, ShapeBounding, 0, 0, shapeMask, ShapeSet);
-	}
 
 	g_timeout_add(0, timer, NULL);
 	g_signal_connect(G_OBJECT(win), "activate", 
