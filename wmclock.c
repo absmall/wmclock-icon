@@ -28,10 +28,6 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
-#include <X11/Xatom.h>
-#include <X11/Xlib.h>
-#include <X11/xpm.h>
-#include <X11/extensions/shape.h>
 #include <gtk/gtk.h>
 
 #include "dynlist.h"
@@ -114,14 +110,7 @@
 #include "weekday.xpm"
 #include "xpm/date.xpm"
 #include "xpm/led.xpm"
-#include "xpm/mask.xbm"
 #include "xpm/mask.xpm"
-
-typedef struct _XpmIcon {
-    Pixmap        pixmap;
-    Pixmap        mask;
-    XpmAttributes attributes;
-} XpmIcon;
 
 void showUsage(void);
 void showVersion(void);
@@ -130,9 +119,8 @@ void executeCommand(char *);
 void showError(const char *, const char*);
 void showFatalError(const char *, const char*);
 void GetXpms(void);
-int flushExposeEvents(Window);
-void redrawWindow(XpmIcon *);
-Pixel GetColor(const char *);
+int flushExposeEvents(GtkStatusIcon *);
+void redrawWindow(GdkPixbuf *);
 int mytime(void);
 void showYear(void);
 void showTime12(void);
@@ -163,20 +151,9 @@ int yPosUnshaped[NUM_Y_POSITIONS] = { 7, 25, 34, 49 };
 int xPos[NUM_X_POSITIONS];
 int yPos[NUM_Y_POSITIONS];
 
-Display    *dpy;
-Window     rootWindow;
-int        screen;
-int        xFd;
-fd_set     xFdSet;
-int        displayDepth;
-XSizeHints sizeHints;
-XWMHints   wmHints;
-Pixel      bgPixel, fgPixel;
-GC         normalGC;
-Window     iconWin, win;
+GtkStatusIcon	*win;
 
 char *progName;
-char *className = "WMClock";
 char *geometry = "";
 char *ledColor = "LightSeaGreen";
 
@@ -194,8 +171,8 @@ int   useUserClockXpm = 0;
 int   useUserMonthXpm = 0;
 int   useUserWeekdayXpm = 0;
 
-XpmIcon clockBg, led, months, dateNums, weekdays;
-XpmIcon visible;
+GdkPixbuf *clockBg, *led, *months, *dateNums, *weekdays;
+GdkPixbuf *visible;
 
 time_t actualTime;
 long   actualMinutes;
@@ -291,8 +268,7 @@ void showFatalError(const char *message, const char *data)
 void GetXpms(void)
 {
    static char     **clock_xpm;
-   XColor            color;
-   XWindowAttributes attributes;
+   GdkColor          color;
    char              ledBright[64];
    char              ledDim[64];
    int               status;
@@ -303,11 +279,8 @@ void GetXpms(void)
    clock_xpm = enableShapedWindow ? mask_xpm : clk_xpm;
 #endif /* ONLY_SHAPED_WINDOW */
    
-   /* for the colormap */
-   XGetWindowAttributes(dpy, rootWindow, &attributes);
-   
    /* get user-defined color */
-   if (!XParseColor(dpy, attributes.colormap, ledColor, &color)) 
+   if(!gdk_color_parse(ledColor, &color))
     {
        showError("parse color", ledColor);
     }
@@ -323,153 +296,84 @@ void GetXpms(void)
 	   color.red, color.green, color.blue);
    led_xpm[LED_XPM_DIM_LINE_INDEX] = &ledDim[0];
 
-   clockBg.attributes.closeness = DEFAULT_XPM_CLOSENESS;
-   clockBg.attributes.valuemask |=
-      (XpmReturnPixels | XpmReturnExtensions | XpmCloseness);
-   
    if (useUserClockXpm)
     {
-       status = XpmReadFileToPixmap(dpy, rootWindow, userClockXpm,
-				    &clockBg.pixmap, &clockBg.mask,
-				    &clockBg.attributes);
+		clockBg = gdk_pixbuf_new_from_xpm_data((const char **)userClockXpm);
     }
    else
     {
-       status = XpmCreatePixmapFromData(dpy, rootWindow, clock_xpm,
-					&clockBg.pixmap, &clockBg.mask,
-					&clockBg.attributes);
+		clockBg = gdk_pixbuf_new_from_xpm_data((const char **)clock_xpm);
     }
-   if (XpmSuccess != status)
+   if (clockBg == NULL)
     {
        showFatalError("create clock pixmap:", errColorCells);
     }
 
 #ifdef ONLY_SHAPED_WINDOW
-   visible.attributes.depth  = displayDepth;
-   visible.attributes.width  = clockBg.attributes.width;
-   visible.attributes.height = clockBg.attributes.height;
-   visible.pixmap = XCreatePixmap(dpy, rootWindow, visible.attributes.width,
-				  visible.attributes.height,
-				  visible.attributes.depth);
+   visible = gdk_pixbuf_new(GDK_COLORSPACE_RGB, 1, 8, gdk_pixbuf_get_width(clockBg), gdk_pixbuf_get_height(clockBg));
 #else /* !ONLY_SHAPED_WINDOW */
-   visible.attributes.closeness = DEFAULT_XPM_CLOSENESS;
-   visible.attributes.valuemask |=
-      (XpmReturnPixels | XpmReturnExtensions | XpmCloseness);
-   status = XpmCreatePixmapFromData(dpy, rootWindow, clk_xpm,
-				    &visible.pixmap, &visible.mask,
-				    &visible.attributes);
+   visible = gdk_pixbuf_new_from_xpm_data(clk_xpm);
 #endif /* ONLY_SHAPED_WINDOW */
 
-   led.attributes.closeness = DEFAULT_XPM_CLOSENESS;
-   led.attributes.valuemask |=
-      (XpmReturnPixels | XpmReturnExtensions | XpmCloseness);
-   status = XpmCreatePixmapFromData(dpy, rootWindow, led_xpm,
-				    &led.pixmap, &led.mask,
-				    &led.attributes);
-   if (XpmSuccess != status)
+   led = gdk_pixbuf_new_from_xpm_data((const char **)led_xpm);
+   if (led == NULL)
     {
        showFatalError("create led pixmap:", errColorCells);
     }
 
-   months.attributes.closeness = DEFAULT_XPM_CLOSENESS;
-   months.attributes.valuemask |=
-      (XpmReturnPixels | XpmReturnExtensions | XpmCloseness);
    if (useUserMonthXpm)
     {
-       status = XpmReadFileToPixmap(dpy, rootWindow, userMonthXpm,
-				    &months.pixmap, &months.mask,
-				    &months.attributes);
+	   months = gdk_pixbuf_new_from_xpm_data((const char **)userMonthXpm);
     }
    else 
     {
-       status = XpmCreatePixmapFromData(dpy, rootWindow, month_xpm,
-					&months.pixmap, &months.mask,
-					&months.attributes);
+	   months = gdk_pixbuf_new_from_xpm_data((const char **)month_xpm);
     }
-   if (XpmSuccess != status)
+   if (months != NULL)
     {
        showFatalError("create month pixmap:", errColorCells);
     }
 
-   dateNums.attributes.closeness = DEFAULT_XPM_CLOSENESS;
-   dateNums.attributes.valuemask |=
-      (XpmReturnPixels | XpmReturnExtensions | XpmCloseness);
-   status = XpmCreatePixmapFromData(dpy, rootWindow, date_xpm,
-				    &dateNums.pixmap, &dateNums.mask,
-				    &dateNums.attributes);
-   if (XpmSuccess != status)
+   dateNums = gdk_pixbuf_new_from_xpm_data((const char **)date_xpm);
+   if (dateNums != NULL)
     {
        showFatalError("create date pixmap:", errColorCells);
     }
 
-   weekdays.attributes.closeness = DEFAULT_XPM_CLOSENESS;
-   weekdays.attributes.valuemask |=
-      (XpmReturnPixels | XpmReturnExtensions | XpmCloseness);
    if (useUserWeekdayXpm) 
     {
-       status = XpmReadFileToPixmap(dpy, rootWindow, userWeekdayXpm,
-				    &weekdays.pixmap, &weekdays.mask,
-				    &weekdays.attributes);
+	   weekdays = gdk_pixbuf_new_from_xpm_data((const char **)userWeekdayXpm);
     }
    else
     {
-       status = XpmCreatePixmapFromData(dpy, rootWindow, weekday_xpm,
-					&weekdays.pixmap, &weekdays.mask,
-					&weekdays.attributes);
+	   weekdays = gdk_pixbuf_new_from_xpm_data((const char **)weekday_xpm);
     }
-   if (XpmSuccess != status)
+   if (weekdays != NULL)
     {
        showFatalError("create weekday pixmap:", errColorCells);
     }
 }
 
 /* Remove expose events for a specific window from the queue */
-int flushExposeEvents(Window w)
+int flushExposeEvents(GtkStatusIcon *w)
 {
-   XEvent dummy;
    int    i = 0;
+#if 0
+   XEvent dummy;
    
    while (XCheckTypedWindowEvent(dpy, w, Expose, &dummy))
     {
        i++;
     }
+#endif
    return(i);
 }
 
 /* (Re-)Draw the main window and the icon window */
-void redrawWindow(XpmIcon *v)
+void redrawWindow(GdkPixbuf *v)
 {
-   flushExposeEvents(iconWin);
-   XCopyArea(dpy, v->pixmap, iconWin, normalGC,
-	     0, 0, v->attributes.width, v->attributes.height, 0, 0);
    flushExposeEvents(win);
-   XCopyArea(dpy, v->pixmap, win, normalGC,
-	     0, 0, v->attributes.width, v->attributes.height, 0, 0);
-}
-
-gboolean redraw(gpointer user_data)
-{
-	XpmIcon *v = (XpmIcon *)user_data;
-	redrawWindow(v);
-}
-
-/* Get a Pixel for the given color name */
-Pixel GetColor(const char *colorName)
-{
-   XColor            color;
-   XWindowAttributes attributes;
-   
-   XGetWindowAttributes(dpy, rootWindow, &attributes);
-   color.pixel = 0;
-   if (!XParseColor(dpy, attributes.colormap, colorName, &color)) 
-    {
-       showError("parse color", colorName);
-    }
-   else if (!XAllocColor(dpy, attributes.colormap, &color)) 
-    {
-       showError("allocate color", colorName);
-    }
-   return(color.pixel);
+   gtk_status_icon_set_from_pixbuf(win, v);
 }
 
 /* Fetch the system time and time zone */
@@ -494,21 +398,13 @@ void showYear(void)
    
    digitYOffset = LED_NUM_Y_OFFSET;
    digitXOffset = LED_NUM_WIDTH * (year / 1000);
-   XCopyArea(dpy, led.pixmap, visible.pixmap, normalGC,
-	     digitXOffset , digitYOffset, LED_NUM_WIDTH, LED_NUM_HEIGHT,
-	     xPos[DIGIT_1_X_POS], yPos[DIGIT_Y_POS]);
+   gdk_pixbuf_copy_area(led, digitXOffset, digitYOffset, LED_NUM_WIDTH, LED_NUM_HEIGHT, visible, xPos[DIGIT_1_X_POS], yPos[DIGIT_Y_POS]);
    digitXOffset = LED_NUM_WIDTH * ((year % 100) % 10);
-   XCopyArea(dpy, led.pixmap, visible.pixmap, normalGC,
-	     digitXOffset , digitYOffset, LED_NUM_WIDTH, LED_NUM_HEIGHT,
-	     xPos[DIGIT_2_X_POS], yPos[DIGIT_Y_POS]);
+   gdk_pixbuf_copy_area(led, digitXOffset, digitYOffset, LED_NUM_WIDTH, LED_NUM_HEIGHT, visible, xPos[DIGIT_2_X_POS], yPos[DIGIT_Y_POS]);
    digitXOffset = LED_NUM_WIDTH * ((year / 10) % 10);
-   XCopyArea(dpy, led.pixmap, visible.pixmap, normalGC,
-	     digitXOffset , digitYOffset, LED_NUM_WIDTH, LED_NUM_HEIGHT,
-	     xPos[DIGIT_3_X_POS], yPos[DIGIT_Y_POS]);
+   gdk_pixbuf_copy_area(led, digitXOffset, digitYOffset, LED_NUM_WIDTH, LED_NUM_HEIGHT, visible, xPos[DIGIT_3_X_POS], yPos[DIGIT_Y_POS]);
    digitXOffset = LED_NUM_WIDTH * (year % 10);
-   XCopyArea(dpy, led.pixmap, visible.pixmap, normalGC,
-	     digitXOffset , digitYOffset, LED_NUM_WIDTH, LED_NUM_HEIGHT,
-	     xPos[DIGIT_4_X_POS], yPos[DIGIT_Y_POS]);
+   gdk_pixbuf_copy_area(led, digitXOffset, digitYOffset, LED_NUM_WIDTH, LED_NUM_HEIGHT, visible, xPos[DIGIT_4_X_POS], yPos[DIGIT_Y_POS]);
 }
 
 /* Display time in twelve-hour mode, with am/pm indicator */
@@ -525,38 +421,26 @@ void showTime12(void)
    if (localTime->tm_hour < 12)
     {
        /* AM */
-       XCopyArea(dpy, led.pixmap, visible.pixmap, normalGC,
-		 AM_X_OFFSET, AM_Y_OFFSET, AM_WIDTH, AM_HEIGHT,
-		 xPos[AMPM_X_POS], yPos[DIGIT_Y_POS] + AM_Y_OFFSET);
+	   gdk_pixbuf_copy_area(led, AM_X_OFFSET, AM_Y_OFFSET, AM_WIDTH, AM_HEIGHT, visible, xPos[AMPM_X_POS], yPos[DIGIT_Y_POS] + AM_Y_OFFSET);
     }
    else
     {
        /* PM */
-       XCopyArea(dpy, led.pixmap, visible.pixmap, normalGC,
-		 PM_X_OFFSET, PM_Y_OFFSET, PM_WIDTH, PM_HEIGHT,
-		 xPos[AMPM_X_POS], yPos[DIGIT_Y_POS] + PM_Y_OFFSET);
+	   gdk_pixbuf_copy_area(led, PM_X_OFFSET, PM_Y_OFFSET, PM_WIDTH, PM_HEIGHT, visible, xPos[AMPM_X_POS], yPos[DIGIT_Y_POS] + PM_Y_OFFSET);
     }
    
    digitYOffset = LED_NUM_Y_OFFSET;
    if (localHour > 9)
     {
        digitXOffset = LED_THIN_1_X_OFFSET;
-       XCopyArea(dpy, led.pixmap, visible.pixmap, normalGC,
-		 digitXOffset, digitYOffset, LED_THIN_1_WIDTH, LED_NUM_HEIGHT,
-		 xPos[DIGIT_1_X_POS], yPos[DIGIT_Y_POS]);
+	   gdk_pixbuf_copy_area(led, digitXOffset, digitYOffset, LED_THIN_1_WIDTH, LED_NUM_HEIGHT, visible, xPos[DIGIT_1_X_POS], yPos[DIGIT_Y_POS]);
     }
    digitXOffset = LED_NUM_WIDTH * (localHour % 10);
-   XCopyArea(dpy, led.pixmap, visible.pixmap, normalGC,
-	     digitXOffset, digitYOffset, LED_NUM_WIDTH, LED_NUM_HEIGHT,
-	     xPos[DIGIT_2_X_POS], yPos[DIGIT_Y_POS]);
+   gdk_pixbuf_copy_area(led, digitXOffset, digitYOffset, LED_NUM_WIDTH, LED_NUM_HEIGHT, visible, xPos[DIGIT_2_X_POS], yPos[DIGIT_Y_POS]);
    digitXOffset = LED_NUM_WIDTH * (localTime->tm_min / 10);
-   XCopyArea(dpy, led.pixmap, visible.pixmap, normalGC,
-	     digitXOffset, digitYOffset, LED_NUM_WIDTH, LED_NUM_HEIGHT,
-	     xPos[DIGIT_3_X_POS], yPos[DIGIT_Y_POS]);
+   gdk_pixbuf_copy_area(led, digitXOffset, digitYOffset, LED_NUM_WIDTH, LED_NUM_HEIGHT, visible, xPos[DIGIT_3_X_POS], yPos[DIGIT_Y_POS]);
    digitXOffset = LED_NUM_WIDTH * (localTime->tm_min % 10);
-   XCopyArea(dpy, led.pixmap, visible.pixmap, normalGC,
-	     digitXOffset, digitYOffset, LED_NUM_WIDTH, LED_NUM_HEIGHT,
-	     xPos[DIGIT_4_X_POS], yPos[DIGIT_Y_POS]);
+   gdk_pixbuf_copy_area(led, digitXOffset, digitYOffset, LED_NUM_WIDTH, LED_NUM_HEIGHT, visible, xPos[DIGIT_4_X_POS], yPos[DIGIT_Y_POS]);
 }
 
 /* Display time in 24-hour mode, without am/pm indicator */
@@ -567,21 +451,13 @@ void showTime24(void)
    
    digitYOffset = LED_NUM_Y_OFFSET;
    digitXOffset = LED_NUM_WIDTH * (localTime->tm_hour / 10);
-   XCopyArea(dpy, led.pixmap, visible.pixmap, normalGC,
-	     digitXOffset, digitYOffset, LED_NUM_WIDTH, LED_NUM_HEIGHT,
-	     xPos[DIGIT_1_X_POS], yPos[DIGIT_Y_POS]);
+   gdk_pixbuf_copy_area(led, digitXOffset, digitYOffset, LED_NUM_WIDTH, LED_NUM_HEIGHT, visible, xPos[DIGIT_1_X_POS], yPos[DIGIT_Y_POS]);
    digitXOffset = LED_NUM_WIDTH * (localTime->tm_hour % 10);
-   XCopyArea(dpy, led.pixmap, visible.pixmap, normalGC,
-	     digitXOffset, digitYOffset, LED_NUM_WIDTH, LED_NUM_HEIGHT,
-	     xPos[DIGIT_2_X_POS], yPos[DIGIT_Y_POS]);
+   gdk_pixbuf_copy_area(led, digitXOffset, digitYOffset, LED_NUM_WIDTH, LED_NUM_HEIGHT, visible, xPos[DIGIT_2_X_POS], yPos[DIGIT_Y_POS]);
    digitXOffset = LED_NUM_WIDTH * (localTime->tm_min / 10);
-   XCopyArea(dpy, led.pixmap, visible.pixmap, normalGC,
-	     digitXOffset, digitYOffset, LED_NUM_WIDTH, LED_NUM_HEIGHT,
-	     xPos[DIGIT_3_X_POS], yPos[DIGIT_Y_POS]);
+   gdk_pixbuf_copy_area(led, digitXOffset, digitYOffset, LED_NUM_WIDTH, LED_NUM_HEIGHT, visible, xPos[DIGIT_3_X_POS], yPos[DIGIT_Y_POS]);
    digitXOffset = LED_NUM_WIDTH * (localTime->tm_min % 10);
-   XCopyArea(dpy, led.pixmap, visible.pixmap, normalGC,
-	     digitXOffset, digitYOffset, LED_NUM_WIDTH, LED_NUM_HEIGHT,
-	     xPos[DIGIT_4_X_POS], yPos[DIGIT_Y_POS]);
+   gdk_pixbuf_copy_area(led, digitXOffset, digitYOffset, LED_NUM_WIDTH, LED_NUM_HEIGHT, visible, xPos[DIGIT_4_X_POS], yPos[DIGIT_Y_POS]);
 }
 
 void showTime(void)
@@ -596,8 +472,7 @@ void showTime(void)
    localTime = localtime(&actualTime);
    
    /* leere clock holen */
-   XCopyArea(dpy, clockBg.pixmap, visible.pixmap, normalGC,
-	     0, 0, sizeHints.width, sizeHints.height, 0, 0);
+   gdk_pixbuf_copy_area(clockBg, 0, 0,  gdk_pixbuf_get_width(clockBg), gdk_pixbuf_get_height(clockBg), visible, 0, 0);
    
    if (enableYearDisplay)
     {
@@ -615,46 +490,34 @@ void showTime(void)
    /* Monat */
    xOffset = MONTH_X_OFFSET;
    yOffset = MONTH_HEIGHT * (localTime->tm_mon);
-   XCopyArea(dpy, months.pixmap, visible.pixmap, normalGC,
-	     xOffset, yOffset, MONTH_WIDTH, MONTH_HEIGHT,
-	     xPos[MONTH_X_POS], yPos[MONTH_Y_POS]);
+   gdk_pixbuf_copy_area(months, xOffset, yOffset, MONTH_WIDTH, MONTH_HEIGHT, visible, xPos[MONTH_X_POS], yPos[MONTH_Y_POS]);
    
    /* Datum */
    yOffset = DATE_Y_OFFSET;
    if (localTime->tm_mday > 9)
     {
        xOffset = DATE_NUM_WIDTH * (((localTime->tm_mday / 10) + 9) % 10);
-       XCopyArea(dpy, dateNums.pixmap, visible.pixmap, normalGC,
-		 xOffset, yOffset, DATE_NUM_WIDTH, DATE_NUM_HEIGHT,
-		 xPos[DATE_LEFT_X_POS], yPos[DATE_Y_POS]);
+	   gdk_pixbuf_copy_area(dateNums, xOffset, yOffset, DATE_NUM_WIDTH, DATE_NUM_HEIGHT, visible, xPos[DATE_LEFT_X_POS], yPos[DATE_Y_POS]);
        xOffset = DATE_NUM_WIDTH * (((localTime->tm_mday % 10) + 9) % 10);
-       XCopyArea(dpy, dateNums.pixmap, visible.pixmap, normalGC,
-		 xOffset, yOffset, DATE_NUM_WIDTH, DATE_NUM_HEIGHT,
-		 xPos[DATE_RIGHT_X_POS], yPos[DATE_Y_POS]);
+	   gdk_pixbuf_copy_area(dateNums, xOffset, yOffset, DATE_NUM_WIDTH, DATE_NUM_HEIGHT, visible, xPos[DATE_RIGHT_X_POS], yPos[DATE_Y_POS]);
     }
    else
     {
        xOffset = DATE_NUM_WIDTH * (localTime->tm_mday - 1);
-       XCopyArea(dpy, dateNums.pixmap, visible.pixmap, normalGC,
-		 xOffset, yOffset, DATE_NUM_WIDTH, DATE_NUM_HEIGHT,
-		 xPos[DATE_CENTER_X_POS], yPos[DATE_Y_POS]);
+	   gdk_pixbuf_copy_area(dateNums, xOffset, yOffset, DATE_NUM_WIDTH, DATE_NUM_HEIGHT, visible, xPos[DATE_CENTER_X_POS], yPos[DATE_Y_POS]);
     }
    
    /* Wochentag */
    xOffset = WEEKDAY_X_OFFSET;
    yOffset = WEEKDAY_HEIGHT * ((localTime->tm_wday + 6) % 7);
-   XCopyArea(dpy, weekdays.pixmap, visible.pixmap, normalGC,
-	     xOffset, yOffset, WEEKDAY_WIDTH, WEEKDAY_HEIGHT,
-	     xPos[WEEKDAY_X_POS], yPos[WEEKDAY_Y_POS]); 
+   gdk_pixbuf_copy_area(weekdays, xOffset, yOffset, WEEKDAY_WIDTH, WEEKDAY_HEIGHT, visible, xPos[WEEKDAY_X_POS], yPos[WEEKDAY_Y_POS]);
    
    if ((!enableBlinking) && (!enableYearDisplay))
     {
        /* Sekunden Doppelpunkt ein */
        xOffset = COLON_X_OFFSET;
        yOffset = COLON_Y_OFFSET;
-       XCopyArea(dpy, led.pixmap, visible.pixmap, normalGC,
-		 xOffset, yOffset, COLON_WIDTH, COLON_HEIGHT,
-		 xPos[COLON_X_POS], yPos[COLON_Y_POS]);
+	   gdk_pixbuf_copy_area(led, xOffset, yOffset, COLON_WIDTH, COLON_HEIGHT, visible, xPos[COLON_X_POS], yPos[COLON_Y_POS]);
     }
 }
 
@@ -816,291 +679,179 @@ int processArgs(int argc, char **argv)
    return (i);
 }
 
+gboolean timer(gpointer user_data)
+{
+	struct timeval nextEvent;
+
+	if (actualTime != mytime())
+	{
+		actualTime = mytime();
+		if (actualMinutes != (actualTime / 60))
+		{
+			showTime();
+			if (!enableBlinking)
+			{
+				redrawWindow(visible);
+			}
+		}
+		if (enableBlinking && (!enableYearDisplay))
+		{  
+			if (actualTime % 2)
+			{
+				/* Sekunden Doppelpunkt ein */
+				gdk_pixbuf_copy_area(led, COLON_X_OFFSET, COLON_Y_OFFSET, COLON_WIDTH, COLON_HEIGHT, visible, xPos[COLON_X_POS], yPos[COLON_Y_POS]);
+			}
+			else
+			{
+				/* Sekunden Doppelpunkt aus */
+				gdk_pixbuf_copy_area(led, BLANK_X_OFFSET, BLANK_Y_OFFSET, COLON_WIDTH, COLON_HEIGHT, visible, xPos[COLON_X_POS], yPos[COLON_Y_POS]);
+			}
+			redrawWindow(visible);
+		}
+		if (0 == (actualTime % 2))
+		{
+			/* Clean up zombie processes */
+			if (NULL != commandToExec) 
+			{
+				waitpid(0, NULL, WNOHANG);
+			}
+		}
+	}
+	
+	/* We compute the date of next event, in order to avoid polling */
+	if (enableBlinking)
+	{
+		gettimeofday(&nextEvent,NULL);
+		nextEvent.tv_sec = 0;
+		nextEvent.tv_usec = 1000000-nextEvent.tv_usec;
+	}
+	else
+	{
+		if (enableYearDisplay)
+		{
+			nextEvent.tv_sec = 86400-actualTime%86400;
+			nextEvent.tv_usec = 0;
+		}
+		else
+		{
+			nextEvent.tv_sec = 60-actualTime%60;
+			nextEvent.tv_usec = 0;
+		}
+	}
+
+	g_timeout_add(nextEvent.tv_sec * 1000 + nextEvent.tv_usec, timer, NULL);
+
+	return FALSE;
+}
+
+void click(GtkStatusIcon *status_icon, 
+                        gpointer user_data)
+{
+	if (NULL != commandToExec)
+	{
+		pid_t fork_pid;
+
+		if ((NULL == commandBuf) &&
+				(!buildCommand(commandToExec, &commandBuf,
+							   &commandLength, &commandIndex)))
+		{
+			return;
+		}
+
+		fork_pid = fork();
+		switch (fork_pid)
+		{
+			case 0:
+				/* We're the child process;
+				 * run the command and exit.
+				 */
+				executeCommand(commandBuf);
+				/* When the system() call finishes, we're done. */
+				exit(0);
+				break;
+			case -1:
+				/* We're the parent process, but
+				 * fork() gave an error.
+				 */
+				perror("fork");
+				break;
+			default:
+				/* We're the parent process;
+				 * keep on doing what we normally do.
+				 */
+				break;
+		}
+	}
+}
+
 /**********************************************************************/
 int main(int argc, char **argv)
 {
-   int           i;
-   unsigned int  borderWidth = 0;
-   char          *displayName = NULL; 
-   XGCValues     gcValues;
-   unsigned long gcMask;
-   XEvent        event;
-   XTextProperty wmName;
-   XClassHint    classHint;
-   Pixmap        shapeMask;
-   struct timeval nextEvent;
-   
-   /* Parse command line options */
-   progName = extractProgName(argv[0]);
-   processArgs(argc, argv);
+	int           i;
+	GdkPixbuf    *shapeMask;
 
-   gtk_init(&argc, &argv);
-   
-   /* init led position */
+	/* Parse command line options */
+	progName = extractProgName(argv[0]);
+	processArgs(argc, argv);
+
+	/* init led position */
 #ifndef ONLY_SHAPED_WINDOW
-   for (i = 0; i < NUM_Y_POSITIONS; i++)
-    {
-       yPos[i] = enableShapedWindow ? yPosShaped[i] : yPosUnshaped[i];
-    }
-   for (i = 0; i < NUM_X_POSITIONS; i++)
-    {
-       xPos[i] = enableShapedWindow ? xPosShaped[i] : xPosUnshaped[i]; 
-    }
+	for (i = 0; i < NUM_Y_POSITIONS; i++)
+	{
+		yPos[i] = enableShapedWindow ? yPosShaped[i] : yPosUnshaped[i];
+	}
+	for (i = 0; i < NUM_X_POSITIONS; i++)
+	{
+		xPos[i] = enableShapedWindow ? xPosShaped[i] : xPosUnshaped[i]; 
+	}
 #else /* ONLY_SHAPED_WINDOW */
-   for (i = 0; i < NUM_Y_POSITIONS; i++)
-    {
-       yPos[i] = yPosShaped[i];
-    }
-   for (i = 0; i < NUM_X_POSITIONS; i++)
-    {
-       xPos[i] = xPosShaped[i];
-    }
+	for (i = 0; i < NUM_Y_POSITIONS; i++)
+	{
+		yPos[i] = yPosShaped[i];
+	}
+	for (i = 0; i < NUM_X_POSITIONS; i++)
+	{
+		xPos[i] = xPosShaped[i];
+	}
 #endif /* !ONLY_SHAPED_WINDOW */
-   for (i = 0; i < NUM_TIME_POSITIONS; i++)
-    {
-      if (enable12HourClock && (!enableYearDisplay))
-       {
-         xPos[i] += timePos24[i];
-       }
-      else
-       {
-         xPos[i] += timePos12[i];
-       }
-    }
-   
-   /* Open the display */
-   dpy = XOpenDisplay(displayName);
-   if (NULL == dpy)  
-    { 
-       fprintf(stderr, "%s: can't open display %s\n", progName,
-	       XDisplayName(displayName));
-       exit(1); 
-    }
-   screen       = DefaultScreen(dpy);
-   rootWindow   = RootWindow(dpy, screen);
-   displayDepth = DefaultDepth(dpy, screen);
-   xFd          = XConnectionNumber(dpy);
-   
-   /* Icon Daten nach XImage konvertieren */
-   GetXpms();
-   
-   /* Create a window to hold the banner */
-   sizeHints.x = 0;
-   sizeHints.y = 0;
-   sizeHints.min_width  = clockBg.attributes.width;
-   sizeHints.min_height = clockBg.attributes.height;
-   sizeHints.max_width  = clockBg.attributes.width;
-   sizeHints.max_height = clockBg.attributes.height;
-   sizeHints.base_width  = clockBg.attributes.width;
-   sizeHints.base_height = clockBg.attributes.height;
-   sizeHints.flags = USSize | USPosition | PMinSize | PMaxSize | PBaseSize;
-   
-   bgPixel = GetColor("white");
-   fgPixel = GetColor("black");
-   
-   XWMGeometry(dpy, screen, geometry, NULL, borderWidth, &sizeHints,
-	       &sizeHints.x, &sizeHints.y, &sizeHints.width, &sizeHints.height,
-	       &sizeHints.win_gravity);
-   sizeHints.width  = clockBg.attributes.width;
-   sizeHints.height = clockBg.attributes.height;
-   
-   win = XCreateSimpleWindow(dpy, rootWindow, sizeHints.x, sizeHints.y,
-			     sizeHints.width, sizeHints.height,
-			     borderWidth, fgPixel, bgPixel);
-   iconWin = XCreateSimpleWindow(dpy, win, sizeHints.x, sizeHints.y,
-				 sizeHints.width, sizeHints.height,
-				 borderWidth, fgPixel, bgPixel);
+	for (i = 0; i < NUM_TIME_POSITIONS; i++)
+	{
+		if (enable12HourClock && (!enableYearDisplay))
+		{
+			xPos[i] += timePos24[i];
+		}
+		else
+		{
+			xPos[i] += timePos12[i];
+		}
+	}
 
-   /* Hints aktivieren */
-   XSetWMNormalHints(dpy, win, &sizeHints);
-   classHint.res_name = progName;
-   classHint.res_class = className;
-   XSetClassHint(dpy, win, &classHint);
-   
-   XSelectInput(dpy, win, OUR_WINDOW_EVENTS);
-   XSelectInput(dpy, iconWin, OUR_WINDOW_EVENTS);
-   
-   if (0 == XStringListToTextProperty(&progName, 1, &wmName))
-    {
-       fprintf(stderr, "%s: can't allocate window name text property\n",
-	       progName);
-       exit(-1);
-    }
-   XSetWMName(dpy, win, &wmName);
-  
-   /* Create a GC for drawing */
-   gcMask = GCForeground | GCBackground | GCGraphicsExposures;
-   gcValues.foreground = fgPixel;
-   gcValues.background = bgPixel;
-   gcValues.graphics_exposures = False;
-   normalGC = XCreateGC(dpy, rootWindow, gcMask, &gcValues);
+	/* Icon Daten nach XImage konvertieren */
+	GetXpms();
 
-   if (enableShapedWindow)
-    {
-       shapeMask = XCreateBitmapFromData(dpy, win, (char *)mask_bits,
-					 mask_width, mask_height);
-       XShapeCombineMask(dpy, win, ShapeBounding, 0, 0, shapeMask, ShapeSet);
-       XShapeCombineMask(dpy, iconWin, ShapeBounding, 0, 0, shapeMask,
-			 ShapeSet);
-    }
-  
-   wmHints.initial_state = WithdrawnState;
-   wmHints.icon_window = iconWin;
-   wmHints.icon_x = sizeHints.x;
-   wmHints.icon_y = sizeHints.y;
-   wmHints.window_group = win;
-   wmHints.flags = StateHint | IconWindowHint | IconPositionHint |
-      WindowGroupHint;
-   XSetWMHints(dpy, win, &wmHints);
+	/* Create a window to hold the banner */
+	win = gtk_status_icon_new_from_pixbuf(clockBg);
 
-   XSetCommand(dpy, win, argv, argc);
-   XMapWindow(dpy,win);
-	g_timeout_add(60, redraw, &visible);
+	if (enableShapedWindow)
+	{
+		shapeMask = gdk_pixbuf_new_from_xpm_data((const char **)mask_xpm);
+		//FIXME
+		//XShapeCombineMask(dpy, win, ShapeBounding, 0, 0, shapeMask, ShapeSet);
+	}
 
-   showTime();
-   redrawWindow(&visible);
+	gtk_init(&argc, &argv);
+	g_timeout_add(0, timer, NULL);
+	g_signal_connect(G_OBJECT(win), "activate", 
+					 G_CALLBACK(click), NULL);
+
+	showTime();
+	redrawWindow(visible);
 	gtk_main();
-   while (1)
-    {
-       if (actualTime != mytime())
-	{
-	   actualTime = mytime();
-	   if (actualMinutes != (actualTime / 60))
-	    {
-	       showTime();
-	       if (!enableBlinking)
-		{
-		  redrawWindow(&visible);
-		}
-	    }
-	  if (enableBlinking && (!enableYearDisplay))
-	    {  
-	       if (actualTime % 2)
-		{
-		   /* Sekunden Doppelpunkt ein */
-		   XCopyArea(dpy, led.pixmap, visible.pixmap, normalGC,
-			     COLON_X_OFFSET, COLON_Y_OFFSET,
-			     COLON_WIDTH, COLON_HEIGHT,
-			     xPos[COLON_X_POS], yPos[COLON_Y_POS]);
-		}
-	       else
-		{
-		   /* Sekunden Doppelpunkt aus */
-		   XCopyArea(dpy, led.pixmap, visible.pixmap, normalGC,
-			     BLANK_X_OFFSET, BLANK_Y_OFFSET,
-			     COLON_WIDTH, COLON_HEIGHT,
-			     xPos[COLON_X_POS], yPos[COLON_Y_POS]);
-		}
-	       redrawWindow(&visible);
-	    }
-	   if (0 == (actualTime % 2))
-	    {
-	       /* Clean up zombie processes */
-#ifdef DEBUG
-	       fprintf(stderr, "%s: cleaning up zombies (time %ld)\n",
-		       progName, actualTime);
-#endif /* DEBUG */
-	       if (NULL != commandToExec) 
-		{
-		   waitpid(0, NULL, WNOHANG);
-		}
-	    }
-	}
-       
-       /* read a packet */
-       while (XPending(dpy))
-	{
-	   XNextEvent(dpy, &event);
-	   switch(event.type)
-	    {
-	     case Expose:
-	       if (0 == event.xexpose.count)
-		{
-		   redrawWindow(&visible);
-		}
-	       break;
-	    case ButtonPress:
-	       if (NULL != commandToExec)
-		{
-		   pid_t fork_pid;
-		   
-		   if ((NULL == commandBuf) &&
-		       (!buildCommand(commandToExec, &commandBuf,
-				      &commandLength, &commandIndex)))
-		    {
-		       break;
-		    }
-		   fork_pid = fork();
-		   switch (fork_pid)
-		    {
-		     case 0:
-		       /* We're the child process;
-			* run the command and exit.
-			*/
-		       executeCommand(commandBuf);
-		       /* When the system() call finishes, we're done. */
-		       exit(0);
-		       break;
-		     case -1:
-		       /* We're the parent process, but
-			* fork() gave an error.
-			*/
-		       perror("fork");
-		       break;
-		     default:
-		       /* We're the parent process;
-			* keep on doing what we normally do.
-			*/
-		       break;
-		    }
-		}
-	       break;
-	    case DestroyNotify:
+
 #ifdef ONLY_SHAPED_WINDOW
-	       XFreePixmap(dpy, visible.pixmap);
+	g_object_unref(visible);
 #endif /* ONLY_SHAPED_WINDOW */
-	       XCloseDisplay(dpy);
-	       exit(0); 
-	     default:
-	       break;      
-	    }
-	}
-       XFlush(dpy);
-#ifdef SYSV
-       if (enableYearDisplay)
-	{
-	   poll((struct poll *) 0, (size_t) 0, 200);	/* 1/5 sec */
-	}
-       else
-	{
-	   poll((struct poll *) 0, (size_t) 0, 50);	/* 5/100 sec */
-	}
-#else
-       /* We compute the date of next event, in order to avoid polling */
-       if (enableBlinking)
-	 {
-	   gettimeofday(&nextEvent,NULL);
-	   nextEvent.tv_sec = 0;
-	   nextEvent.tv_usec = 1000000-nextEvent.tv_usec;
-	 }
-       else
-	 {
-	   if (enableYearDisplay)
-	     {
-	       nextEvent.tv_sec = 86400-actualTime%86400;
-	       nextEvent.tv_usec = 0;
-	     }
-	   else
-	     {
-	       nextEvent.tv_sec = 60-actualTime%60;
-	       nextEvent.tv_usec = 0;
-	     }
-	 }
-       FD_ZERO(&xFdSet);
-       FD_SET(xFd,&xFdSet);
-       select(FD_SETSIZE,&xFdSet,NULL,NULL,&nextEvent);
-#endif
-    }
-   return (0);
+
+	return (0);
 }
 
