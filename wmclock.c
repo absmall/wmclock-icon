@@ -739,7 +739,7 @@ gboolean timer(gpointer user_data)
 		}
 	}
 
-	g_timeout_add(nextEvent.tv_sec * 1000 + nextEvent.tv_usec, timer, NULL);
+	g_timeout_add(nextEvent.tv_sec * 1000 + nextEvent.tv_usec/1000, timer, NULL);
 
 	return FALSE;
 }
